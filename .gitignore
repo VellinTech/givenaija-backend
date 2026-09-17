@@ -7,6 +7,7 @@
 venv/
 ENV/
 env/
+.env.example
 
 # Python Cache & Bytecode
 __pycache__/
