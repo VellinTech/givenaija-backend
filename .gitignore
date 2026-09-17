@@ -1,13 +1,31 @@
-.venv
-venv
+# Environment & Secrets (Never commit credentials)
 .env
-__pycache__
-*.pyc
-*.pyo
-.git
-.gitignore
-.env
-.pytest_cache
-.mypy_cache
-.vscode
-.idea
+*.env
+
+# Python Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+
+# Package Manager Cache
+.uv/
+
+# Docker & Database local data
+postgres_data/
+*.db
+*.sqlite3
+.docker/
+
+# OS & Editor Files
+.DS_Store
+.vscode/
+.idea/
+*.swp
