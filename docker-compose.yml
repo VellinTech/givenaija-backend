@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: givenaija_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/givenaija
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:15-alpine
+    container_name: givenaija_db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=givenaija
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: givenaija_redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
