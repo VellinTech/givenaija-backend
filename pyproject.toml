@@ -3,5 +3,10 @@ name = "givenaija-backend"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi[standard]>=0.141.1",
+    "jose>=1.0.0",
+    "jwt>=1.4.0",
+    "passlib[bcrypt]>=1.7.4",
+    "sqlmodel>=0.0.42",
 ]
