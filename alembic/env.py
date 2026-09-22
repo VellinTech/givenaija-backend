@@ -12,7 +12,7 @@ from app.domains.audit.models import AuditLog
 from app.domains.auth.models import User, Member
 from app.domains.campaigns.models import Campaign, Pledge
 from app.domains.donations.models import Donation, Receipt, IdempotencyKey
-from app.domains.webhooks.models import ProcessedEvent
+# from app.domains.webhooks.models import ProcessedEvent
 
 # Setup Alembic configuration object
 config = context.config
