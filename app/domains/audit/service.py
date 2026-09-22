@@ -1,55 +1,56 @@
+"""
+Audit Domain Business Logic.
 
+Provides transaction-safe append-only logging helpers and administrator
+query operations for auditing compliance.
+"""
 
-from typing import Optional
-from fastapi import HTTPException, status
+from typing import List, Optional
+from uuid import UUID
 from sqlmodel import Session, select
-from app.core.security import get_password_hash, verify_password
-from app.domains.auth.models import User, Member, UserRegister
+from app.domains.audit.models import AuditLog
 
 
-def get_user_by_email(session: Session, email: str) -> Optional[User]:
- 
-    statement = select(User).where(User.email == email)
-    return session.exec(statement).first()
-
-
-def create_user_account(session: Session, user_data: UserRegister) -> User:
-
-    existing_user = get_user_by_email(session, user_data.email)
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User with this email already exists"
-        )
-
-    user = User(
-        email=user_data.email,
-        password_hash=get_password_hash(user_data.password),
-        role=user_data.role.value
+def log_event(
+    session: Session,
+    action: str,
+    target_type: str,
+    actor_id: Optional[UUID] = None,
+    target_id: Optional[UUID] = None
+) -> AuditLog:
+    """
+    Appends a new immutable entry to the audit log.
+    Must be called within an active database transaction.
+    """
+    audit_entry = AuditLog(
+        actor_id=actor_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id
     )
-    session.add(user)
+    session.add(audit_entry)
+    # Flushed/committed by caller or explicitly committed here
     session.commit()
-    session.refresh(user)
+    session.refresh(audit_entry)
+    return audit_entry
 
 
-    member = Member(
-        user_id=user.id,
-        phone=user_data.phone,
-        bio=user_data.bio
-    )
-    session.add(member)
-    session.commit()
+def get_audit_logs(
+    session: Session,
+    skip: int = 0,
+    limit: int = 50,
+    actor_id: Optional[UUID] = None,
+    action: Optional[str] = None
+) -> List[AuditLog]:
+    """
+    Retrieves a paginated list of audit records with optional actor/action filtering.
+    """
+    statement = select(AuditLog)
 
-    return user
+    if actor_id:
+        statement = statement.where(AuditLog.actor_id == actor_id)
+    if action:
+        statement = statement.where(AuditLog.action == action)
 
-
-def authenticate_user(session: Session, email: str, password: str) -> User:
-
-    user = get_user_by_email(session, email)
-    if not user or not verify_password(password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return user
+    statement = statement.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit)
+    return session.exec(statement).all()

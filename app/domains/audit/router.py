@@ -1,31 +1,57 @@
+"""
+Audit Domain API Routes.
 
+Restricted routes allowing system administrators to inspect security
+and operational audit logs.
+"""
 
-from fastapi import APIRouter, Depends, status
+from typing import List, Optional
+from uuid import UUID
+from fastapi import APIRouter, Depends, Query, status
 from sqlmodel import Session
-from app.core.deps import get_session, get_current_user
-from app.core.security import create_access_token
-from app.domains.auth.models import UserRegister, UserLogin, UserRead, Token, User
-from app.domains.auth import service
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+from app.core.deps import get_session, require_roles
+from app.domains.auth.models import User, UserRole
+from app.domains.audit.models import AuditLogRead
+from app.domains.audit import service
 
-
-@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def register(user_in: UserRegister, session: Session = Depends(get_session)):
-  
-    user = service.create_user_account(session, user_in)
-    return user
+router = APIRouter(prefix="/admin/audit-log", tags=["Audit Log"])
 
 
-@router.post("/login", response_model=Token)
-def login(user_in: UserLogin, session: Session = Depends(get_session)):
-  
-    user = service.authenticate_user(session, user_in.email, user_in.password)
-    access_token = create_access_token(subject=user.id)
-    return Token(access_token=access_token, token_type="bearer")
+@router.get(
+    "",
+    response_model=List[AuditLogRead],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_roles([UserRole.ADMIN.value]))]
+)
+def fetch_audit_logs(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    actor_id: Optional[UUID] = Query(default=None),
+    action: Optional[str] = Query(default=None),
+    session: Session = Depends(get_session)
+):
+    """
+    Retrieves system audit logs. Restricted strictly to users with the 'admin' role.
+    """
+    logs = service.get_audit_logs(
+        session=session,
+        skip=skip,
+        limit=limit,
+        actor_id=actor_id,
+        action=action
+    )
+    
+    # Format output model timestamps
+    return [
+        AuditLogRead(
+            id=log.id,
+            actor_id=log.actor_id,
+            action=log.action,
+            target_type=log.target_type,
+            target_id=log.target_id,
+            created_at=log.created_at.isoformat()
+        )
+        for log in logs
+    ]
 
-
-@router.get("/me", response_model=UserRead)
-def get_me(current_user: User = Depends(get_current_user)):
-   
-    return current_user
