@@ -1,24 +1,23 @@
-
-
 from typing import List
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+from jwt import InvalidTokenError
 from sqlmodel import Session
 
 from app.core.config import settings
 from app.db.session import get_session
 from app.domains.auth.models import User
 
-# OAuth2 scheme looking for a Bearer token in the Authorization HTTP header
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{settings.API_V1_STR}/auth/login"
-)
+# Simple "paste a Bearer token" scheme — matches our JSON-body login endpoint,
+# unlike OAuth2PasswordBearer which expects a form-encoded username/password
+# login (the wrong shape for POST /auth/login's {"email": ..., "password": ...}).
+bearer_scheme = HTTPBearer()
 
 
 def get_current_user(
     session: Session = Depends(get_session),
-    token: str = Depends(oauth2_scheme)
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
 ) -> User:
 
     credentials_exception = HTTPException(
@@ -26,21 +25,23 @@ def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
+
+    token = credentials.credentials
+
     try:
         # Decode token using application secret and algorithm
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
-    except JWTError:
+    except InvalidTokenError:
         raise credentials_exception
 
     # Query user record from PostgreSQL
     user = session.get(User, user_id)
     if user is None:
         raise credentials_exception
-        
+
     return user
 
 
@@ -53,5 +54,5 @@ def require_roles(allowed_roles: List[str]):
                 detail="Operation not permitted for this role"
             )
         return current_user
-        
+
     return role_checker
