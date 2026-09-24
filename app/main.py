@@ -1,12 +1,17 @@
+"""
+FastAPI Application Entrypoint.
 
+Configures global application settings, mounts CORS, attaches custom Request-ID 
+and execution timing middlewares, and registers API v1 domain routes.
+"""
 
 import time
 import uuid
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import settings
 from app.api import api_router
+from app.core.config import settings
 
 # 1. Instantiate FastAPI application instance
 app = FastAPI(
@@ -28,10 +33,14 @@ app.add_middleware(
 )
 
 
-
+# 3. Custom Request-ID and Timing Middleware
 @app.middleware("http")
 async def add_timing_and_request_id_middleware(request: Request, call_next) -> Response:
-
+    """
+    Intercepts incoming HTTP requests to:
+    - Attach or propagate a unique X-Request-ID header.
+    - Measure processing execution duration and attach X-Process-Time header.
+    """
     start_time = time.time()
     
     # Extract existing request ID header or generate a new UUID4
@@ -57,7 +66,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 # 5. System Health Check Endpoint
 @app.get("/health", tags=["Health Check"])
 def health_check():
-   
+    """System health check probe for uptime monitoring and container checks."""
     return {
         "status": "healthy",
         "project": settings.PROJECT_NAME,
