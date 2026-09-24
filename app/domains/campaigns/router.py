@@ -24,7 +24,8 @@ router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 def create_campaign(
     campaign_in: CampaignCreate,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_roles([UserRole.ADMIN.value]))
+
+current_user: User = Depends(require_roles([UserRole.ADMIN.value]))
 ):
     """Creates a new campaign. Accessible by authenticated users."""
     campaign = service.create_campaign(session, campaign_in, current_user.id)

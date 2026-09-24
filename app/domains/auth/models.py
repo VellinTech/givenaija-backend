@@ -38,8 +38,7 @@ class UserRegister(SQLModel):
     password: str
     phone: Optional[str] = None
     bio: Optional[str] = None
-
-
+    
 class UserLogin(SQLModel):
    
     email: str

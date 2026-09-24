@@ -26,6 +26,8 @@ def create_user_account(session: Session, user_data: UserRegister) -> User:
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
         role=UserRole.DONOR.value
+
+
     )
     session.add(user)
     session.commit()
