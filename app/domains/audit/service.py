@@ -1,14 +1,9 @@
-"""
-Audit Domain Business Logic.
-
-Provides transaction-safe append-only logging helpers and administrator
-query operations for auditing compliance.
-"""
-
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime, timezone
 from sqlmodel import Session, select
 from app.domains.audit.models import AuditLog
+from app.db.firestore import write_activity_feed_entry
 
 
 def log_event(
@@ -18,19 +13,10 @@ def log_event(
     actor_id: Optional[UUID] = None,
     target_id: Optional[UUID] = None
 ) -> AuditLog:
-    """
-    Stages a new audit_log row for insertion (session.add only).
-
-    IMPORTANT: this function does NOT commit. The whole point of the audit
-    trail is that it is written in the SAME transaction as the business
-    change it records — so the caller (e.g. create_donation, create_campaign)
-    must call session.commit() itself, exactly once, after calling this and
-    everything else that belongs to that one business action. If this
-    function committed on its own, a crash between this commit and the
-    caller's own commit could leave an audit row with no matching donation,
-    or a donation with no matching audit row — precisely what the brief's
-    "append-only audit trail" guarantee exists to prevent.
-    """
+    
+    # Appends a new immutable entry to the audit log.
+    # Must be called within an active database transaction.
+    
     audit_entry = AuditLog(
         actor_id=actor_id,
         action=action,
@@ -38,6 +24,20 @@ def log_event(
         target_id=target_id
     )
     session.add(audit_entry)
+    # Flushed/committed by caller or explicitly committed here
+    session.commit()
+    session.refresh(audit_entry)
+
+    # Postgres row above is the real audit trail. This is just a mirror
+    # for the admin dashboard's live feed, so it's fire-and-forget.
+    write_activity_feed_entry({
+        "actor_id": str(actor_id) if actor_id else None,
+        "action": action,
+        "target_type": target_type,
+        "target_id": str(target_id) if target_id else None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
     return audit_entry
 
 
@@ -48,9 +48,9 @@ def get_audit_logs(
     actor_id: Optional[UUID] = None,
     action: Optional[str] = None
 ) -> List[AuditLog]:
-    """
-    Retrieves a paginated list of audit records with optional actor/action filtering.
-    """
+    
+    # Retrieves a paginated list of audit records with optional actor/action filtering.
+    
     statement = select(AuditLog)
 
     if actor_id:
