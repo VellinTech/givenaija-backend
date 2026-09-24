@@ -17,4 +17,9 @@ def get_redis_client() -> Generator[redis.Redis, None, None]:
     try:
         yield client
     finally:
-        client.close() 
+        client.close()
+
+
+def get_redis() -> redis.Redis:
+  
+    return redis.Redis(connection_pool=redis_pool)
