@@ -1,38 +1,22 @@
-"""
-Donations Domain Business Logic.
-
-Handles transaction processing, unique bank reference validation, goal incrementing,
-receipt generation, and financial reporting.
-"""
-
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID, uuid4
 from fastapi import HTTPException, status
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from app.domains.donations.models import Donation, DonationCreate, DonationStatus, Receipt, FinancialStatement
 from app.domains.campaigns.models import Campaign, CampaignStatus
 from app.domains.auth.models import Member
 from app.domains.audit.service import log_event
-from app.domains.campaigns.service import broadcast_campaign_event
+from app.domains.campaigns.service import broadcast_campaign_event, bump_campaigns_cache_version
+from app.db.firestore import write_donation_feed_entry
 
 
+# Records a donation: checks member + campaign, blocks duplicate bank_ref,
+# updates the campaign total, issues a receipt, writes the audit row,
+# invalidates the campaigns cache, and mirrors the event to Firestore.
 def create_donation(session: Session, donation_in: DonationCreate, user_id: UUID) -> Donation:
-    """
-    Executes a donation entry as ONE transaction:
-    1. Validates donor member profile.
-    2. Validates target campaign active status.
-    3. Checks bank reference uniqueness to eliminate double-counting.
-    4. Updates campaign raised_amount atomically.
-    5. Issues a proof-of-payment receipt.
-    6. Writes an audit_log row.
-    7. Commits everything together, exactly once.
-
-    If ANY step fails, nothing above is persisted — there is no window where
-    a donation exists without its audit row, or vice versa.
-    """
     # 1. Fetch member entity
     statement = select(Member).where(Member.user_id == user_id)
     member = session.exec(statement).first()
@@ -44,15 +28,10 @@ def create_donation(session: Session, donation_in: DonationCreate, user_id: UUID
 
     # 2. Fetch target campaign
     campaign = session.get(Campaign, donation_in.campaign_id)
-    if not campaign:
+    if not campaign or campaign.status != CampaignStatus.OPEN.value:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Campaign not found"
-        )
-    if campaign.status != CampaignStatus.OPEN.value:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot record a donation against a closed campaign"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target campaign is invalid or closed"
         )
 
     # 3. Prevent duplicate processing via unique bank_ref check
@@ -63,7 +42,7 @@ def create_donation(session: Session, donation_in: DonationCreate, user_id: UUID
             detail=f"Donation with bank reference '{donation_in.bank_ref}' has already been processed"
         )
 
-    # 4. Stage the donation (not committed yet)
+    # 4. Save successful donation
     donation = Donation(
         member_id=member.id,
         campaign_id=campaign.id,
@@ -73,23 +52,23 @@ def create_donation(session: Session, donation_in: DonationCreate, user_id: UUID
     )
     session.add(donation)
 
-    # 5. Stage the campaign total update (not committed yet)
+    # 5. Increment campaign raised amount
     campaign.raised_amount += donation_in.amount
     session.add(campaign)
 
-    # Flush (not commit) so donation.id exists for the receipt's foreign key,
-    # without ending the transaction or making it visible to other sessions.
-    session.flush()
+    session.commit()
+    session.refresh(donation)
 
-    # 6. Stage the receipt
-    receipt_number = f"REC-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
+    # 6. Generate receipt entity
+    receipt_number = f"REC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid4().hex[:6].upper()}"
     receipt = Receipt(
         donation_id=donation.id,
         receipt_number=receipt_number
     )
     session.add(receipt)
+    session.commit()
 
-    # 7. Stage the audit row — same transaction as everything above
+    # 7. Write audit record
     log_event(
         session=session,
         action="DONATION_SUCCESSFUL",
@@ -98,15 +77,23 @@ def create_donation(session: Session, donation_in: DonationCreate, user_id: UUID
         target_id=donation.id
     )
 
-    # ONE commit for the entire business action.
-    session.commit()
-    session.refresh(donation)
+    # 8. raised_amount just changed -- invalidate cached campaign list pages
+    bump_campaigns_cache_version()
+
+    # 9. Best-effort Firestore feed write for the campaign page's live ticker
+    write_donation_feed_entry(str(campaign.id), {
+        "donation_id": str(donation.id),
+        "campaign_id": str(campaign.id),
+        "amount": str(donation.amount),
+        "bank_ref": donation.bank_ref,
+        "created_at": donation.created_at.isoformat(),
+    })
 
     return donation
 
 
+# Retrieves all historical donations made by the current authenticated user.
 def get_user_donations(session: Session, user_id: UUID) -> List[Donation]:
-    """Retrieves all historical donations made by the current authenticated user."""
     statement = (
         select(Donation)
         .join(Member, Donation.member_id == Member.id)
@@ -116,14 +103,21 @@ def get_user_donations(session: Session, user_id: UUID) -> List[Donation]:
     return session.exec(statement).all()
 
 
-def get_receipt_by_donation_id(session: Session, donation_id: UUID) -> Receipt:
-    """
-    Retrieves the receipt for a given donation, or raises HTTP 404.
+# Retrieves a receipt by its own UUID.
+def get_receipt_by_id(session: Session, receipt_id: UUID) -> Receipt:
+    receipt = session.get(Receipt, receipt_id)
+    if not receipt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Receipt not found"
+        )
+    return receipt
 
-    Because receipts.donation_id is UNIQUE and issued once inside
-    create_donation()'s single transaction, calling this twice for the same
-    donation always returns the same receipt_number — never a new one.
-    """
+
+# Retrieves the receipt for a given donation. Same donation_id always
+# returns the same receipt_number -- receipts are issued once, at
+# donation time, and never regenerated.
+def get_receipt_by_donation_id(session: Session, donation_id: UUID) -> Receipt:
     statement = select(Receipt).where(Receipt.donation_id == donation_id)
     receipt = session.exec(statement).first()
     if not receipt:
@@ -134,18 +128,17 @@ def get_receipt_by_donation_id(session: Session, donation_id: UUID) -> Receipt:
     return receipt
 
 
+# Generates summary financial metrics, optionally filtered by date range.
 def generate_financial_statement(
     session: Session,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
 ) -> FinancialStatement:
-    """Generates high-level financial summary metrics, optionally filtered by date range."""
     statement = select(Donation)
-    if date_from:
+    if date_from is not None:
         statement = statement.where(Donation.created_at >= date_from)
-    if date_to:
+    if date_to is not None:
         statement = statement.where(Donation.created_at <= date_to)
-
     donations = session.exec(statement).all()
 
     total_count = len(donations)
@@ -158,5 +151,5 @@ def generate_financial_statement(
         total_revenue_raised=total_revenue,
         successful_donations_count=successful_count,
         failed_donations_count=failed_count,
-        generated_at=datetime.now(timezone.utc).isoformat()
+        generated_at=datetime.utcnow().isoformat()
     )

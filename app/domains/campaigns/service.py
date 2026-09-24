@@ -1,10 +1,3 @@
-"""
-Campaigns Domain Business Logic.
-
-Handles campaign creation, paginated queries, status changes, pledge processing,
-audit trail logging, and streaming events (SSE).
-"""
-
 import asyncio
 from decimal import Decimal
 from typing import List, Optional
@@ -15,19 +8,32 @@ from sqlmodel import Session, select
 from app.domains.campaigns.models import Campaign, CampaignCreate, CampaignStatus, Pledge, PledgeCreate, PledgeStatus
 from app.domains.auth.models import Member
 from app.domains.audit.service import log_event
+from app.db.redis import get_redis
 
 # Active client connection queues for Server-Sent Events (SSE) broadcasting
 _sse_subscribers: list[asyncio.Queue] = []
 
+CAMPAIGNS_CACHE_VERSION_KEY = "campaigns:cache_version"
+
 
 async def broadcast_campaign_event(data: str) -> None:
-    """Pushes a JSON string update to all open SSE subscriber client queues."""
+    # Pushes a JSON string update to all open SSE subscriber client queues.
     for queue in list(_sse_subscribers):
         await queue.put(data)
 
 
+# Bumping this version number invalidates every cached GET /campaigns page
+# at once -- no need to know or scan for individual cache keys, since each
+# cached key embeds the version (see router.list_campaigns).
+def bump_campaigns_cache_version() -> None:
+    try:
+        get_redis().incr(CAMPAIGNS_CACHE_VERSION_KEY)
+    except Exception as exc:
+        print(f"[redis] cache invalidation failed (non-fatal): {exc}")
+
+
 def create_campaign(session: Session, campaign_in: CampaignCreate, creator_id: UUID) -> Campaign:
-    """Creates a new campaign entity and records a system audit event, as ONE transaction."""
+    # Creates a new campaign entity and records a system audit event.
     campaign = Campaign(
         creator_id=creator_id,
         title=campaign_in.title,
@@ -36,8 +42,10 @@ def create_campaign(session: Session, campaign_in: CampaignCreate, creator_id: U
         status=CampaignStatus.OPEN.value
     )
     session.add(campaign)
-    session.flush()  # get campaign.id without ending the transaction
+    session.commit()
+    session.refresh(campaign)
 
+    # Log action to immutable audit trail
     log_event(
         session=session,
         action="CAMPAIGN_CREATED",
@@ -45,14 +53,12 @@ def create_campaign(session: Session, campaign_in: CampaignCreate, creator_id: U
         actor_id=creator_id,
         target_id=campaign.id
     )
-
-    session.commit()  # ONE commit for the whole business action
-    session.refresh(campaign)
+    bump_campaigns_cache_version()
     return campaign
 
 
 def get_campaign_by_id(session: Session, campaign_id: UUID) -> Campaign:
-    """Fetches a campaign by UUID or raises an HTTP 404 Exception."""
+    # Fetches a campaign by UUID or raises an HTTP 404 Exception.
     campaign = session.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(
@@ -62,32 +68,26 @@ def get_campaign_by_id(session: Session, campaign_id: UUID) -> Campaign:
     return campaign
 
 
-def list_campaigns(
-    session: Session,
-    skip: int = 0,
-    limit: int = 20,
-    status_filter: Optional[str] = None,
-) -> List[Campaign]:
-    """Retrieves a paginated list of campaigns, optionally filtered by status."""
-    statement = select(Campaign)
-    if status_filter:
-        statement = statement.where(Campaign.status == status_filter)
-    statement = statement.order_by(Campaign.created_at.desc()).offset(skip).limit(limit)
+def list_campaigns(session: Session, skip: int = 0, limit: int = 20) -> List[Campaign]:
+    # Retrieves a paginated list of campaigns ordered by creation date.
+    statement = select(Campaign).order_by(Campaign.created_at.desc()).offset(skip).limit(limit)
     return session.exec(statement).all()
 
 
 def close_campaign(session: Session, campaign_id: UUID, actor_id: UUID) -> Campaign:
-    """Closes an open campaign, as ONE transaction including its audit row."""
+    # Closes an open campaign to restrict new contributions or pledges.
     campaign = get_campaign_by_id(session, campaign_id)
-
+    
     if campaign.status == CampaignStatus.CLOSED.value:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Campaign is already closed"
         )
 
     campaign.status = CampaignStatus.CLOSED.value
     session.add(campaign)
+    session.commit()
+    session.refresh(campaign)
 
     log_event(
         session=session,
@@ -96,17 +96,15 @@ def close_campaign(session: Session, campaign_id: UUID, actor_id: UUID) -> Campa
         actor_id=actor_id,
         target_id=campaign.id
     )
-
-    session.commit()  # ONE commit
-    session.refresh(campaign)
+    bump_campaigns_cache_version()
     return campaign
 
 
 def create_pledge(session: Session, pledge_in: PledgeCreate, user_id: UUID) -> Pledge:
-    """
-    Validates user member status and target campaign availability, then
-    creates a pledge and its audit row as ONE transaction.
-    """
+    
+    # Validates user member status and target campaign availability before creating a pledge.
+    
+    # 1. Fetch member profile associated with user
     statement = select(Member).where(Member.user_id == user_id)
     member = session.exec(statement).first()
     if not member:
@@ -115,13 +113,15 @@ def create_pledge(session: Session, pledge_in: PledgeCreate, user_id: UUID) -> P
             detail="Member profile not found for user"
         )
 
+    # 2. Ensure target campaign exists and remains active
     campaign = get_campaign_by_id(session, pledge_in.campaign_id)
     if campaign.status != CampaignStatus.OPEN.value:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot pledge to a closed campaign"
         )
 
+    # 3. Create and persist pledge
     pledge = Pledge(
         member_id=member.id,
         campaign_id=campaign.id,
@@ -129,7 +129,8 @@ def create_pledge(session: Session, pledge_in: PledgeCreate, user_id: UUID) -> P
         status=PledgeStatus.PENDING.value
     )
     session.add(pledge)
-    session.flush()  # get pledge.id without ending the transaction
+    session.commit()
+    session.refresh(pledge)
 
     log_event(
         session=session,
@@ -138,7 +139,4 @@ def create_pledge(session: Session, pledge_in: PledgeCreate, user_id: UUID) -> P
         actor_id=user_id,
         target_id=pledge.id
     )
-
-    session.commit()  # ONE commit
-    session.refresh(pledge)
     return pledge

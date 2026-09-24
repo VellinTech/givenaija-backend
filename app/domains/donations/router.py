@@ -1,11 +1,5 @@
-"""
-Donations Domain API Routes.
-
-Exposes REST endpoints for creating donations, retrieving receipts,
-and viewing financial summary reports.
-"""
-
 from datetime import datetime
+import json
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Query, status
@@ -16,23 +10,22 @@ from app.core.idempotency import compute_payload_hash, check_or_reserve_idempote
 from app.domains.auth.models import User, UserRole
 from app.domains.donations.models import DonationCreate, DonationRead, ReceiptRead, FinancialStatement
 from app.domains.donations import service
+from app.domains.campaigns.service import broadcast_campaign_event
 
 router = APIRouter(tags=["Donations & Reports"])
 
 
+# Records a donation. Supports Idempotency-Key for safe client retries --
+# same key + same body returns the original response untouched, instead
+# of re-running the business logic (which would wrongly hit the bank_ref
+# duplicate check).
 @router.post("/donations", response_model=DonationRead, status_code=status.HTTP_201_CREATED)
-def create_donation(
+async def create_donation(
     donation_in: DonationCreate,
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Records a monetary donation. Supports Idempotency-Key headers for safe
-    client retries: retrying the exact same request with the same key
-    returns the ORIGINAL response, unchanged, without re-running the
-    business logic a second time.
-    """
     payload_dict = donation_in.dict()
 
     if idempotency_key:
@@ -43,10 +36,7 @@ def create_donation(
             payload=payload_dict,
         )
         if cached_response is not None:
-            # Same key + same payload as a previous request — short-circuit
-            # and return the exact original response. Do NOT re-run
-            # service.create_donation(), or the bank_ref UNIQUE check would
-            # incorrectly reject this as a duplicate.
+            # nothing new happened -- no SSE broadcast either
             return cached_response
 
     donation = service.create_donation(session, donation_in, current_user.id)
@@ -71,9 +61,22 @@ def create_donation(
         )
         session.commit()
 
+    # push to the live campaign ticker -- only reached for a genuinely
+    # new donation, cache replays above return early
+    await broadcast_campaign_event(json.dumps({
+        "type": "donation.recorded",
+        "id": str(donation.id),
+        "data": {
+            "campaign_id": str(donation.campaign_id),
+            "amount": str(donation.amount),
+        },
+        "at": donation.created_at.isoformat(),
+    }))
+
     return response_data
 
 
+# Retrieves paginated donation history for the authenticated user.
 @router.get("/donations/me", response_model=List[DonationRead])
 def get_my_donations(
     skip: int = Query(default=0, ge=0),
@@ -81,7 +84,6 @@ def get_my_donations(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Retrieves paginated donation history for the authenticated user."""
     donations = service.get_user_donations(session, current_user.id)
     paginated = donations[skip: skip + limit]
     return [
@@ -98,20 +100,16 @@ def get_my_donations(
     ]
 
 
+# Retrieves the receipt for a given donation. Same donation_id always
+# returns the same receipt_number.
+# NOTE: no ownership check yet -- any authenticated user can view any
+# donation's receipt right now. Known gap, not fixed in this pass.
 @router.get("/receipts/{donation_id}", response_model=ReceiptRead)
 def get_receipt(
     donation_id: UUID,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Retrieves the receipt for a given donation. Asking for the same
-    donation_id repeatedly always returns the same receipt_number.
-
-    NOTE: an ownership check (only the donor who made this donation, or a
-    finance/admin user, may view it) is not yet enforced here — see the
-    project audit document, Part 3.9, for the follow-up fix.
-    """
     receipt = service.get_receipt_by_donation_id(session, donation_id)
     return ReceiptRead(
         id=receipt.id,
@@ -121,6 +119,8 @@ def get_receipt(
     )
 
 
+# Generates an aggregated financial statement, optionally filtered by date
+# range (?from=2026-01-01&to=2026-01-31). Restricted to finance/admin.
 @router.get(
     "/reports/statement",
     response_model=FinancialStatement,
@@ -131,8 +131,4 @@ def get_financial_statement(
     to: Optional[datetime] = Query(default=None),
     session: Session = Depends(get_session),
 ):
-    """
-    Generates an aggregated financial statement, optionally filtered by date
-    range (?from=2026-01-01&to=2026-01-31). Restricted to finance/admin.
-    """
     return service.generate_financial_statement(session, date_from=from_, date_to=to)
