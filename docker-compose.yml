@@ -11,9 +11,12 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/givenaija
       - REDIS_URL=redis://redis:6379/0
+      - FIRESTORE_EMULATOR_HOST=firestore:8080
+      - FIRESTORE_PROJECT_ID=givenaija-dev
     depends_on:
       - db
       - redis
+      - firestore
 
   db:
     image: postgres:15-alpine
@@ -32,6 +35,15 @@ services:
     container_name: givenaija_redis
     ports:
       - "6379:6379"
+
+  firestore:
+    image: mtlynch/firestore-emulator-docker
+    container_name: givenaija_firestore
+    environment:
+      - FIRESTORE_PROJECT_ID=givenaija-dev
+      - PORT=8080
+    ports:
+      - "8080:8080"
 
   pgadmin:
     image: dpage/pgadmin4:latest
