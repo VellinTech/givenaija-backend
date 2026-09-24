@@ -19,8 +19,17 @@ def log_event(
     target_id: Optional[UUID] = None
 ) -> AuditLog:
     """
-    Appends a new immutable entry to the audit log.
-    Must be called within an active database transaction.
+    Stages a new audit_log row for insertion (session.add only).
+
+    IMPORTANT: this function does NOT commit. The whole point of the audit
+    trail is that it is written in the SAME transaction as the business
+    change it records — so the caller (e.g. create_donation, create_campaign)
+    must call session.commit() itself, exactly once, after calling this and
+    everything else that belongs to that one business action. If this
+    function committed on its own, a crash between this commit and the
+    caller's own commit could leave an audit row with no matching donation,
+    or a donation with no matching audit row — precisely what the brief's
+    "append-only audit trail" guarantee exists to prevent.
     """
     audit_entry = AuditLog(
         actor_id=actor_id,
@@ -29,9 +38,6 @@ def log_event(
         target_id=target_id
     )
     session.add(audit_entry)
-    # Flushed/committed by caller or explicitly committed here
-    session.commit()
-    session.refresh(audit_entry)
     return audit_entry
 
 
