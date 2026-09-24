@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     WEBHOOK_SECRET: str = "whsec_test_givenaija_secret_key"  # Secret used to verify gateway HMACs
 
    
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/givenaija_db"
+    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/givenaija_db"
     REDIS_URL: str = "redis://localhost:6379/0"
 
     
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
 
     
-    PAYSTACK_SECRET_KEY: str 
+    PAYSTACK_SECRET_KEY: str = "sk_test_f50eae3c9d36a357d7a1bee5f89f0bf43d5ced8f5bd236a9"
 
 
     model_config = SettingsConfigDict(
