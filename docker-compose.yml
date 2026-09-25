@@ -9,7 +9,8 @@ services:
     volumes:
       - .:/app
     environment:
-      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/givenaija
+      - DATABASE_URL=postgresql+psycopg://givenaija_app:givenaija_app_password@db:5432/givenaija
+      - ALEMBIC_DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/givenaija
       - REDIS_URL=redis://redis:6379/0
       - FIRESTORE_EMULATOR_HOST=firestore:8080
       - FIRESTORE_PROJECT_ID=givenaija-dev

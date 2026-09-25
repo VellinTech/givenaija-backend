@@ -1,11 +1,3 @@
-"""
-Ledger Domain Business Logic.
-
-Enforces fundamental accounting rules:
-- Double-entry balance check: Total Debits MUST equal Total Credits ($\sum Debit = \sum Credit$).
-- Automatic account validation and posting to general ledger.
-"""
-
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
@@ -32,6 +24,47 @@ def create_account(session: Session, account_in: AccountCreate) -> Account:
         code=account_in.code,
         name=account_in.name,
         account_type=account_in.account_type.value
+    )
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return account
+
+
+# Single shared account every donation's cash lands in. Auto-created the
+# first time it's needed -- no manual seed step required.
+CASH_ACCOUNT_CODE = "1010"
+
+
+def get_or_create_cash_account(session: Session) -> Account:
+    account = session.exec(select(Account).where(Account.code == CASH_ACCOUNT_CODE)).first()
+    if account:
+        return account
+
+    account = Account(
+        code=CASH_ACCOUNT_CODE,
+        name="Cash - Bank",
+        account_type="ASSET"
+    )
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return account
+
+
+# One revenue account per campaign, so the ledger can report donation
+# revenue broken out by campaign, not just as one lump sum. Code is
+# derived from the campaign's own id so it's stable and auto-created.
+def get_or_create_campaign_revenue_account(session: Session, campaign_id: UUID, campaign_title: str) -> Account:
+    code = f"4000-{str(campaign_id)[:8]}"
+    account = session.exec(select(Account).where(Account.code == code)).first()
+    if account:
+        return account
+
+    account = Account(
+        code=code,
+        name=f"Donation Revenue - {campaign_title}",
+        account_type="REVENUE"
     )
     session.add(account)
     session.commit()

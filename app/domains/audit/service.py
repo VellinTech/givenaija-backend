@@ -25,8 +25,7 @@ def log_event(
     )
     session.add(audit_entry)
     # Flushed/committed by caller or explicitly committed here
-    session.commit()
-    session.refresh(audit_entry)
+    session.flush()
 
     # Postgres row above is the real audit trail. This is just a mirror
     # for the admin dashboard's live feed, so it's fire-and-forget.

@@ -53,6 +53,8 @@ def create_campaign(session: Session, campaign_in: CampaignCreate, creator_id: U
         actor_id=creator_id,
         target_id=campaign.id
     )
+    session.commit()
+    session.refresh(campaign)
     bump_campaigns_cache_version()
     return campaign
 
@@ -77,7 +79,7 @@ def list_campaigns(session: Session, skip: int = 0, limit: int = 20) -> List[Cam
 def close_campaign(session: Session, campaign_id: UUID, actor_id: UUID) -> Campaign:
     # Closes an open campaign to restrict new contributions or pledges.
     campaign = get_campaign_by_id(session, campaign_id)
-    
+
     if campaign.status == CampaignStatus.CLOSED.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -96,14 +98,20 @@ def close_campaign(session: Session, campaign_id: UUID, actor_id: UUID) -> Campa
         actor_id=actor_id,
         target_id=campaign.id
     )
+
+    session.commit()
+    session.refresh(campaign)
+
+
+
     bump_campaigns_cache_version()
     return campaign
 
 
 def create_pledge(session: Session, pledge_in: PledgeCreate, user_id: UUID) -> Pledge:
-    
+
     # Validates user member status and target campaign availability before creating a pledge.
-    
+
     # 1. Fetch member profile associated with user
     statement = select(Member).where(Member.user_id == user_id)
     member = session.exec(statement).first()
@@ -139,4 +147,7 @@ def create_pledge(session: Session, pledge_in: PledgeCreate, user_id: UUID) -> P
         actor_id=user_id,
         target_id=pledge.id
     )
+
+    session.commit()
+    session.refresh(campaign)
     return pledge

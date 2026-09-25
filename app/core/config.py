@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
    
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/givenaija_db"
+    ALEMBIC_DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@db:5432/givenaija"
+
     REDIS_URL: str = "redis://localhost:6379/0"
 
     

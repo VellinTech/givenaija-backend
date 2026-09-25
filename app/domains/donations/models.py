@@ -67,6 +67,7 @@ class DonationRead(SQLModel):
     amount: Decimal
     bank_ref: str
     status: str
+    journal_entry_id: Optional[UUID] = None
     created_at: str
 
 

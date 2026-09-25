@@ -1,12 +1,3 @@
-"""
-Ledger Domain Schemas & Database Entities.
-
-Implements double-entry general ledger accounting:
-- Account: Chart of accounts (Cash, Revenue, Accounts Receivable, etc.)
-- JournalEntry: Header for financial transactions
-- JournalLine: Debits and Credits balancing each entry
-"""
-
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional

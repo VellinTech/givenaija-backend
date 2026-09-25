@@ -22,7 +22,7 @@ if config.config_file_name:
     fileConfig(config.config_file_name)
 
 # Set DB URL dynamically from app settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.ALEMBIC_DATABASE_URL)
 
 # Assign SQLModel metadata target for schema auto-diffing
 target_metadata = SQLModel.metadata

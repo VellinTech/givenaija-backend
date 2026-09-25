@@ -48,6 +48,7 @@ async def create_donation(
         amount=donation.amount,
         bank_ref=donation.bank_ref,
         status=donation.status,
+        journal_entry_id=donation.journal_entry_id,
         created_at=donation.created_at.isoformat()
     )
 
@@ -94,6 +95,7 @@ def get_my_donations(
             amount=d.amount,
             bank_ref=d.bank_ref,
             status=d.status,
+            journal_entry_id=d.journal_entry_id,
             created_at=d.created_at.isoformat()
         )
         for d in paginated
@@ -102,23 +104,26 @@ def get_my_donations(
 
 # Retrieves the receipt for a given donation. Same donation_id always
 # returns the same receipt_number.
-# NOTE: no ownership check yet -- any authenticated user can view any
-# donation's receipt right now. Known gap, not fixed in this pass.
+# Retrieves the receipt for a given donation.
+# Only the user who owns the donation can access its receipt.
 @router.get("/receipts/{donation_id}", response_model=ReceiptRead)
 def get_receipt(
     donation_id: UUID,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    receipt = service.get_receipt_by_donation_id(session, donation_id)
+    receipt = service.get_receipt_by_donation_id(
+        session,
+        donation_id,
+        current_user.id,
+    )
+
     return ReceiptRead(
         id=receipt.id,
         donation_id=receipt.donation_id,
         receipt_number=receipt.receipt_number,
         issued_at=receipt.issued_at.isoformat()
     )
-
-
 # Generates an aggregated financial statement, optionally filtered by date
 # range (?from=2026-01-01&to=2026-01-31). Restricted to finance/admin.
 @router.get(

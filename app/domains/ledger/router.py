@@ -1,10 +1,3 @@
-"""
-Ledger Domain API Routes.
-
-Restricted routes for managing accounts and posting double-entry general ledger entries.
-Accessible only by Finance and Admin users.
-"""
-
 from typing import List
 from uuid import UUID
 from fastapi import APIRouter, Depends, status
