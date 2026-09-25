@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
 
     
-    PAYSTACK_SECRET_KEY: str = "sk_test_f50eae3c9d36a357d7a1bee5f89f0bf43d5ced8f5bd236a9"
+    PAYSTACK_SECRET_KEY: str
 
 
     model_config = SettingsConfigDict(
